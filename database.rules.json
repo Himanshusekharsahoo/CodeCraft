@@ -1,0 +1,35 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "workspaces": {
+      "$workspaceId": {
+        "cursors": {
+          ".read": "auth != null",
+          "$userId": {
+            ".write": "auth != null && auth.uid === $userId",
+            ".validate": "newData.hasChildren(['x', 'y', 'timestamp'])",
+            "x": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100000"
+            },
+            "y": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100000"
+            },
+            "displayName": {
+              ".validate": "newData.isString() && newData.val().length <= 50"
+            },
+            "color": {
+              ".validate": "newData.isString() && newData.val().length <= 30"
+            },
+            "timestamp": {
+              ".validate": "newData.isNumber() && newData.val() <= (now + 60000)"
+            },
+            "$other": {
+              ".validate": false
+            }
+          }
+        }
+      }
+    }
+  }
+}

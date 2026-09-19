@@ -1,0 +1,32 @@
+# ==============================================================================
+# CodeCraft Collaboration Server — Production Dockerfile
+# Lightweight Yjs CRDT WebSocket Server
+# ==============================================================================
+
+FROM node:20-alpine AS runner
+WORKDIR /app
+
+RUN apk add --no-cache curl
+
+# Create non-root system user
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 collab
+
+# Copy server files
+COPY collaborationserver/package.json ./package.json
+RUN npm install --omit=dev --ignore-scripts
+
+COPY collaborationserver/src ./src
+
+USER collab
+
+ENV NODE_ENV=production
+ENV COLLAB_PORT=1234
+ENV COLLAB_HOST=0.0.0.0
+
+EXPOSE 1234
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:1234/health || exit 1
+
+CMD ["node", "src/server.js"]

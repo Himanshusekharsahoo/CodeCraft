@@ -1,0 +1,26 @@
+[Unit]
+Description=CodeCraft Realtime CRDT Collaboration Server
+After=network.target
+
+[Service]
+Type=simple
+User=codecraft
+Group=codecraft
+WorkingDirectory=/opt/codecraft/collaborationserver
+Environment=NODE_ENV=production
+Environment=COLLAB_PORT=1234
+Environment=COLLAB_HOST=0.0.0.0
+EnvironmentFile=-/etc/codecraft/codecraft.env
+ExecStart=/usr/bin/node src/server.js
+Restart=always
+RestartSec=3s
+LimitNOFILE=65535
+TimeoutStopSec=15s
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=codecraft-collab
+
+[Install]
+WantedBy=multi-user.target

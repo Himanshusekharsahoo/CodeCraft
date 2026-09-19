@@ -1,0 +1,118 @@
+{
+  "family": "codecraft-production",
+  "networkMode": "bridge",
+  "requiresCompatibilities": [
+    "EC2"
+  ],
+  "cpu": "2048",
+  "memory": "4096",
+  "volumes": [
+    {
+      "name": "codecraft-git-volume",
+      "host": {
+        "sourcePath": "/mnt/codecraft-git"
+      }
+    },
+    {
+      "name": "docker-socket",
+      "host": {
+        "sourcePath": "/var/run/docker.sock"
+      }
+    }
+  ],
+  "containerDefinitions": [
+    {
+      "name": "codecraft-web",
+      "image": "codecraft-web:latest",
+      "essential": true,
+      "cpu": 1024,
+      "memory": 2048,
+      "portMappings": [
+        {
+          "containerPort": 3000,
+          "hostPort": 3000,
+          "protocol": "tcp"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "codecraft-git-volume",
+          "containerPath": "/app/data/git",
+          "readOnly": false
+        },
+        {
+          "sourceVolume": "docker-socket",
+          "containerPath": "/var/run/docker.sock",
+          "readOnly": false
+        }
+      ],
+      "environment": [
+        { "name": "NODE_ENV", "value": "production" },
+        { "name": "PORT", "value": "3000" },
+        { "name": "NEXT_PUBLIC_COLLAB_WS_URL", "value": "wss://collab.codecraft.internal" },
+        { "name": "NEXT_PUBLIC_COLLAB_HTTP_URL", "value": "http://codecraft-collab:1234" }
+      ],
+      "secrets": [
+        {
+          "name": "GEMINI_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:codecraft/gemini_api_key"
+        }
+      ],
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "curl -f http://localhost:3000/api/health?type=liveness || exit 1"
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 15
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/codecraft/web",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "web"
+        }
+      }
+    },
+    {
+      "name": "codecraft-collab",
+      "image": "codecraft-collab:latest",
+      "essential": true,
+      "cpu": 512,
+      "memory": 1024,
+      "portMappings": [
+        {
+          "containerPort": 1234,
+          "hostPort": 1234,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "NODE_ENV", "value": "production" },
+        { "name": "COLLAB_PORT", "value": "1234" },
+        { "name": "COLLAB_HOST", "value": "0.0.0.0" }
+      ],
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "curl -f http://localhost:1234/health || exit 1"
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 5
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/codecraft/collab",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "collab"
+        }
+      }
+    }
+  ]
+}

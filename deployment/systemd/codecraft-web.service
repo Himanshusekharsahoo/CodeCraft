@@ -1,0 +1,28 @@
+[Unit]
+Description=CodeCraft Next.js Web Application
+After=network.target docker.service codecraft-collab.service
+Wants=docker.service codecraft-collab.service
+
+[Service]
+Type=simple
+User=codecraft
+Group=codecraft
+WorkingDirectory=/opt/codecraft
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOSTNAME=0.0.0.0
+Environment=NEXT_TELEMETRY_DISABLED=1
+EnvironmentFile=-/etc/codecraft/codecraft.env
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=5s
+LimitNOFILE=65535
+TimeoutStopSec=20s
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=codecraft-web
+
+[Install]
+WantedBy=multi-user.target

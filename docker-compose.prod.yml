@@ -1,0 +1,94 @@
+# ==============================================================================
+# CodeCraft — Hardened Production Docker Compose Configuration
+# ==============================================================================
+
+version: '3.8'
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: deployment/docker/Dockerfile.web
+    container_name: codecraft-web-prod
+    restart: always
+    ports:
+      - "127.0.0.1:3000:3000" # Bind strictly to loopback behind Nginx / ALB
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+      - NEXT_TELEMETRY_DISABLED=1
+      - NEXT_PUBLIC_COLLAB_WS_URL=${NEXT_PUBLIC_COLLAB_WS_URL}
+      - NEXT_PUBLIC_COLLAB_HTTP_URL=http://collab:1234
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-1.5-flash}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - COLLAB_INTERNAL_SECRET=${COLLAB_INTERNAL_SECRET}
+      # CC-027: Optional socket isolation proxy endpoint (e.g. tcp://docker-proxy:2375)
+      - DOCKER_HOST=${DOCKER_HOST:-unix:///var/run/docker.sock}
+    volumes:
+      - codecraft_git_data:/app/data/git
+      - codecraft_exec_data:/app/data/executions
+      # CC-027: Mount socket read-only to prevent inode alteration/deletion from container
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '2.00'
+          memory: 2048M
+        reservations:
+          cpus: '0.50'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    depends_on:
+      collab:
+        condition: service_healthy
+    networks:
+      - codecraft-prod-net
+
+  collab:
+    build:
+      context: .
+      dockerfile: deployment/docker/Dockerfile.collab
+    container_name: codecraft-collab-prod
+    restart: always
+    ports:
+      - "127.0.0.1:1234:1234" # Bind strictly to loopback behind Nginx / ALB
+    environment:
+      - NODE_ENV=production
+      - COLLAB_PORT=1234
+      - COLLAB_HOST=0.0.0.0
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+      - COLLAB_INTERNAL_SECRET=${COLLAB_INTERNAL_SECRET}
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '1.00'
+          memory: 1024M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - codecraft-prod-net
+
+networks:
+  codecraft-prod-net:
+    driver: bridge
+
+volumes:
+  codecraft_git_data:
+    name: codecraft_git_data_prod
+  codecraft_exec_data:
+    name: codecraft_exec_data_prod

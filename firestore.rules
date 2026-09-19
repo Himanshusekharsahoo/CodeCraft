@@ -1,0 +1,199 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Authentication and membership helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isUser(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isWorkspaceMember(workspaceId) {
+      return isAuthenticated() && (
+        exists(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid)) ||
+        get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.userId == request.auth.uid
+      );
+    }
+
+    function getWorkspaceRole(workspaceId) {
+      return exists(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid)).data.role
+        : (get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.userId == request.auth.uid ? "owner" : null);
+    }
+
+    function canWriteWorkspace(workspaceId) {
+      return isWorkspaceMember(workspaceId) && (
+        getWorkspaceRole(workspaceId) == "owner" ||
+        getWorkspaceRole(workspaceId) == "contributor"
+      );
+    }
+
+    function isWorkspaceOwner(workspaceId) {
+      return isAuthenticated() && (
+        getWorkspaceRole(workspaceId) == "owner" ||
+        get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.userId == request.auth.uid
+      );
+    }
+
+    // Collection Group: members
+    // Allows authenticated users to query their own membership records across workspaces
+    match /{path=**}/members/{memberId} {
+      allow read: if isAuthenticated() && (
+        memberId == request.auth.uid ||
+        resource.data.userId == request.auth.uid
+      );
+    }
+
+    // Workspaces Collection
+    match /workspaces/{workspaceId} {
+      allow read: if isAuthenticated() && (
+        resource.data.isPublic == true ||
+        resource.data.userId == request.auth.uid ||
+        exists(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid))
+      );
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      // Workspace authority fields (userId, ownerId, isPublic) are protected from contributor tampering (CC-002).
+      // userId is immutable. isPublic and ownerId can only be modified by the workspace owner.
+      // Contributors can update non-authority fields (name, description, updatedAt, archived, etc.).
+      allow update: if isAuthenticated() && (
+        (isWorkspaceOwner(workspaceId) &&
+         request.resource.data.userId == resource.data.userId &&
+         (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['ownerId']) ||
+          ('ownerId' in resource.data && request.resource.data.ownerId == resource.data.ownerId))) ||
+        (canWriteWorkspace(workspaceId) &&
+         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['userId', 'ownerId', 'isPublic']))
+      );
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+
+      // Members Subcollection
+      match /members/{memberId} {
+        allow read: if isAuthenticated() && isWorkspaceMember(workspaceId);
+        // Workspace owner can create or update member roles.
+        // Invited users or public workspace joiners can create their own member record as contributor or viewer.
+        allow create: if isAuthenticated() && (
+          (isWorkspaceOwner(workspaceId) && request.resource.data.role in ["owner", "contributor", "viewer"]) ||
+          (memberId == request.auth.uid &&
+           request.resource.data.userId == request.auth.uid &&
+           request.resource.data.role in ["contributor", "viewer"] &&
+           (get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.isPublic == true ||
+            (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.keys().hasAny(['invites']) &&
+             workspaceId in get(/databases/$(database)/documents/users/$(request.auth.uid)).data.invites)))
+        );
+        allow update: if isAuthenticated() &&
+          isWorkspaceOwner(workspaceId) &&
+          request.resource.data.role in ["owner", "contributor", "viewer"];
+        // Owner can remove members, or an existing member can leave (delete their own membership)
+        allow delete: if isAuthenticated() && (
+          isWorkspaceOwner(workspaceId) ||
+          (memberId == request.auth.uid && isWorkspaceMember(workspaceId))
+        );
+      }
+
+      // Folders Subcollection
+      match /folders/{folderId} {
+        allow read: if isAuthenticated() && (
+          isWorkspaceMember(workspaceId) ||
+          get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.isPublic == true
+        );
+        allow create, update, delete: if canWriteWorkspace(workspaceId);
+      }
+
+      // Files Subcollection
+      match /files/{fileId} {
+        allow read: if isAuthenticated() && (
+          isWorkspaceMember(workspaceId) ||
+          get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.isPublic == true
+        );
+        allow create, update, delete: if canWriteWorkspace(workspaceId);
+      }
+
+      // Comments Subcollection (Phase 5 Inline Code Comments)
+      match /comments/{commentId} {
+        allow read: if isAuthenticated() && (
+          isWorkspaceMember(workspaceId) ||
+          get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.isPublic == true
+        );
+        allow create: if isAuthenticated() &&
+          isWorkspaceMember(workspaceId) &&
+          request.resource.data.authorUid == request.auth.uid;
+        allow update: if isAuthenticated() && isWorkspaceMember(workspaceId) && (
+          resource.data.authorUid == request.auth.uid ||
+          isWorkspaceOwner(workspaceId) ||
+          canWriteWorkspace(workspaceId)
+        );
+        allow delete: if isAuthenticated() && (
+          resource.data.authorUid == request.auth.uid ||
+          isWorkspaceOwner(workspaceId)
+        );
+      }
+
+      // Git Subcollection (Phase 6 Metadata & State)
+      match /git/{document=**} {
+        allow read: if isAuthenticated() && (
+          isWorkspaceMember(workspaceId) ||
+          get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.isPublic == true
+        );
+        allow create, update, delete: if canWriteWorkspace(workspaceId);
+      }
+    }
+
+    // Chat Messages Collection
+    match /messages/{messageId} {
+      allow read: if isAuthenticated() && (
+        resource.data.workspaceId != null &&
+        isWorkspaceMember(resource.data.workspaceId)
+      );
+      // CC-009: Human messages must be author-owned and cannot impersonate AI_BOT;
+      // Authorized server-side AI messages must bind to caller promptAuthorUid and serverVerified flag
+      allow create: if isAuthenticated() && (
+        (
+          request.resource.data.userId == request.auth.uid &&
+          request.resource.data.userId != "AI_BOT" &&
+          request.resource.data.workspaceId != null &&
+          isWorkspaceMember(request.resource.data.workspaceId)
+        ) ||
+        (
+          request.resource.data.userId == "AI_BOT" &&
+          request.resource.data.promptAuthorUid == request.auth.uid &&
+          request.resource.data.workspaceId != null &&
+          isWorkspaceMember(request.resource.data.workspaceId) &&
+          request.resource.data.serverVerified == true
+        )
+      );
+      allow delete: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isWorkspaceOwner(resource.data.workspaceId)
+      );
+      allow update: if false;
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      // Users can create their own profile, but cannot self-inject invites (CC-001)
+      allow create: if isUser(userId) &&
+        (!('invites' in request.resource.data) || request.resource.data.invites.size() == 0);
+
+      // On update:
+      // 1. User updating their own doc: cannot add new invites (can only accept/decline by removing)
+      // 2. Workspace owner inviting a user: can ONLY update the invites array by adding their owned workspaceId
+      allow update: if isAuthenticated() && (
+        (isUser(userId) &&
+         (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['invites']) ||
+          ('invites' in resource.data && resource.data.invites.hasAll(request.resource.data.invites)))) ||
+        (!isUser(userId) &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['invites']) &&
+         (('invites' in resource.data &&
+           request.resource.data.invites.removeAll(resource.data.invites).size() == 1 &&
+           isWorkspaceOwner(request.resource.data.invites.removeAll(resource.data.invites)[0])) ||
+          (!('invites' in resource.data) &&
+           request.resource.data.invites.size() == 1 &&
+           isWorkspaceOwner(request.resource.data.invites[0]))))
+      );
+      allow delete: if isUser(userId);
+    }
+  }
+}
